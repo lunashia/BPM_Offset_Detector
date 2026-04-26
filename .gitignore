@@ -49,3 +49,4 @@ compile_commands.json
 *.sdf
 .DS_Store
 Thumbs.db
+*.exe
