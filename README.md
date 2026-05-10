@@ -248,4 +248,13 @@ The section compares `BPM_offset_detector v0.1.1-alpha` with Librosa / Aubio / E
 | `test_3.mp3` | 147 | 195.981 | 146.987 | 117.610 | 97.51 | 126.29 | 97.94 |
 | `test_4.mp3` | 230 | 114.997 | 153.352 | 184.026 | 114.84 | 120.44 | 114.89 |
 
+## Test Audio Files
 
+The four audio files used in this test set are:
+
+| Audio file | Track |
+|---|---|
+| `test.wav` | wa. remixed celas - Gin no Kaze |
+| `test_2.mp3` | phonon - polyriddim |
+| `test_3.mp3` | FELT - Ethereal |
+| `test_4.mp3` | memme - sky of the ocean |
