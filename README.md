@@ -232,3 +232,20 @@ Signal-level methods such as onset detection, autocorrelation, FFT, and interval
 Without musical interpretation or external knowledge, it can be difficult to decide which periodicity should be called the "actual BPM".
 
 This is why many AIs output ranges or mention alternate interpretations, such as half-time or double-time. 🤔
+
+## Librosa / Aubio / Essentia Comparison (2026/05/10)
+
+The section compares `BPM_offset_detector v0.1.1-alpha` with Librosa / Aubio / Essentia on the same four test files.
+
+- **Librosa**: `librosa.beat.beat_track`
+- **Aubio**: `aubio tempo`
+- **Essentia**: `RhythmExtractor2013`
+
+| Audio file | Actual BPM | Detector Rank 1 | Detector Rank 2 | Detector Rank 3 | Librosa | Aubio | Essentia |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `test.wav` | 175 | 175.018 | 116.661 | 139.993 | 87.59 | 135.75 | 172.27 |
+| `test_2.mp3` | 140 | 163.366 | 122.504 | 140.017 | 123.05 | 125.72 | 122.58 |
+| `test_3.mp3` | 147 | 195.981 | 146.987 | 117.610 | 97.51 | 126.29 | 97.94 |
+| `test_4.mp3` | 230 | 114.997 | 153.352 | 184.026 | 114.84 | 120.44 | 114.89 |
+
+
