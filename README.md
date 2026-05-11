@@ -43,6 +43,12 @@ Windows:
 .\bpm_offset_detector_example.exe C:\path\to\audio.wav
 ```
 
+For BPM Offset Detector v0.1.2-alpha and later
+
+```powershell
+Just double-click the .exe file to select the audio file 😂
+```
+
 ### Run without argument
 
 If no argument is provided, the example tries default files in order:
