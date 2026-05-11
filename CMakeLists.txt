@@ -29,9 +29,19 @@ add_executable(bpm_offset_detector_example
     examples/main.cpp
 )
 
+# Release artifact name: bpm_offset_detector_v0.1.1-alpha(.exe)
+set_target_properties(bpm_offset_detector_example PROPERTIES
+    OUTPUT_NAME "bpm_offset_detector_v0.1.1-alpha"
+)
+
 target_link_libraries(bpm_offset_detector_example
     PRIVATE bpm_offset_detector_core
 )
+
+if(WIN32)
+    # GetOpenFileNameA lives in comdlg32; link explicitly so MinGW also resolves it.
+    target_link_libraries(bpm_offset_detector_example PRIVATE comdlg32)
+endif()
 
 enable_testing()
 
