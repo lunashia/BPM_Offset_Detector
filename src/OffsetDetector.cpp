@@ -54,12 +54,25 @@ static void buildPhaseHistogram(
 {
     histogram.assign(static_cast<size_t>(intervalSamples), 0.0f);
 
+    // Strength gating: keep only strong onsets to reduce phase bias from weak/noisy events.
+    std::vector<float> strengths;
+    strengths.reserve(onsets.size());
+    for(size_t i = 0; i < onsets.size(); ++i) {
+        const float s = (onsets[i].strength > 0.0f) ? onsets[i].strength : 1.0f;
+        strengths.push_back(s);
+    }
+
+    std::sort(strengths.begin(), strengths.end());
+    const size_t qIndex = (strengths.size() * 8u) / 10u; // ~80th percentile
+    const float gate = strengths.empty() ? 0.0f : strengths[std::min(qIndex, strengths.size() - 1u)];
+
     for(size_t i = 0; i < onsets.size(); ++i) {
         int phase = onsets[i].pos % intervalSamples;
         if(phase < 0) phase += intervalSamples;
 
         float s = onsets[i].strength;
-        if(s <= 0.0f) s = 1.0f; // TODO: confirm if invalid/negative onset strengths should be discarded instead.
+        if(s <= 0.0f) s = 1.0f;
+        if(s < gate) continue;
 
         histogram[static_cast<size_t>(phase)] += s;
     }
@@ -93,42 +106,29 @@ static int findBestPhaseIndex(const std::vector<float>& histogram)
 }
 
 // WHAT:
-//   Sub-bin peak refinement via quadratic fit around discrete peak.
+//   Sub-bin peak refinement via local quadratic interpolation around discrete peak.
 // WHY:
-//   Reduces phase quantization error introduced by integer histogram bins.
-//
-// ERROR SOURCE:
-//   Noisy local shape can make parabola unstable; fallback returns discrete peak.
+//   Reduces phase quantization error while staying robust on noisy local shapes.
 static float refinePhaseWithPolyfit(const std::vector<float>& histogram, int peakIndex)
 {
     const int n = static_cast<int>(histogram.size());
-    if(n <= 5) return static_cast<float>(peakIndex);
+    if(n <= 3) return static_cast<float>(peakIndex);
 
-    const int halfWindow = 2;
-    double xs[5];
-    double ys[5];
+    const int left = (peakIndex - 1 + n) % n;
+    const int right = (peakIndex + 1) % n;
 
-    int k = 0;
-    for(int d = -halfWindow; d <= halfWindow; ++d) {
-        const int idx = (peakIndex + d + n) % n;
-        xs[k] = static_cast<double>(d);
-        ys[k] = static_cast<double>(histogram[static_cast<size_t>(idx)]);
-        ++k;
-    }
+    const double yl = static_cast<double>(histogram[static_cast<size_t>(left)]);
+    const double yc = static_cast<double>(histogram[static_cast<size_t>(peakIndex)]);
+    const double yr = static_cast<double>(histogram[static_cast<size_t>(right)]);
 
-    const std::vector<double> c = mathalgo::polyfit(xs, ys, static_cast<size_t>(k), 2);
-    if(c.size() < 3u) return static_cast<float>(peakIndex);
+    const double denom = (yl - 2.0 * yc + yr);
+    if(std::fabs(denom) < 1e-12) return static_cast<float>(peakIndex);
 
-    const double a = c[2];
-    const double b = c[1];
-    if(std::fabs(a) < 1e-12) return static_cast<float>(peakIndex);
+    double delta = 0.5 * (yl - yr) / denom;
+    if(delta < -0.5) delta = -0.5;
+    if(delta > 0.5) delta = 0.5;
 
-    const double localPeak = -b / (2.0 * a);
-    if(localPeak < -2.5 || localPeak > 2.5) {
-        return static_cast<float>(peakIndex); // TODO: consider wider fit window if localPeak escapes expected range frequently.
-    }
-
-    float refined = static_cast<float>(peakIndex + localPeak);
+    float refined = static_cast<float>(static_cast<double>(peakIndex) + delta);
     while(refined < 0.0f) refined += static_cast<float>(n);
     while(refined >= static_cast<float>(n)) refined -= static_cast<float>(n);
     return refined;
@@ -150,14 +150,15 @@ static float scoreOffsetSupport(
     if(beatSec <= 0.0f) return 0.0f;
 
     float score = 0.0f;
+    const float sigma = 0.125f * beatSec;
+    const float denom = 2.0f * sigma * sigma;
     for(size_t i = 0; i < onsets.size(); ++i) {
         const float t = static_cast<float>(onsets[i].pos) / static_cast<float>(sampleRate);
         float phase = std::fmod(t - offsetSec, beatSec);
         if(phase < 0.0f) phase += beatSec;
 
         const float dist = std::min(phase, beatSec - phase);
-        const float closeness = 1.0f - (dist / (0.5f * beatSec));
-        const float w = std::max(0.0f, closeness);
+        const float w = std::exp(-(dist * dist) / denom);
 
         float s = onsets[i].strength;
         if(s <= 0.0f) s = 1.0f;
@@ -241,14 +242,19 @@ float CalculateOffset(
     float offsetSec = refinedPeak / static_cast<float>(sampleRate);
     const float beatSec = 60.0f / bpm;
 
-    const float offbeatSec = normalizeToBeat(offsetSec + 0.5f * beatSec, beatSec);
-    const float scoreBeat = scoreOffsetSupport(onsets, sampleRate, bpm, offsetSec);
-    const float scoreOffbeat = scoreOffsetSupport(onsets, sampleRate, bpm, offbeatSec);
-
-    if(scoreOffbeat > scoreBeat) {
-        offsetSec = offbeatSec;
+    const float quarterBeatSec = 0.25f * beatSec;
+    float bestOffsetSec = normalizeToBeat(offsetSec, beatSec);
+    float bestScore = -std::numeric_limits<float>::infinity();
+    for(int k = 0; k < 4; ++k) {
+        const float candidate = normalizeToBeat(offsetSec + static_cast<float>(k) * quarterBeatSec, beatSec);
+        const float score = scoreOffsetSupport(onsets, sampleRate, bpm, candidate);
+        if(score > bestScore) {
+            bestScore = score;
+            bestOffsetSec = candidate;
+        }
     }
 
+    offsetSec = bestOffsetSec;
     offsetSec = normalizeToBeat(offsetSec, beatSec);
 
     // Output unit: milliseconds.
