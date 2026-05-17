@@ -37,6 +37,51 @@
 
 namespace {
 
+struct BpmPreset {
+    const char* label;
+    float minBpm;
+    float maxBpm;
+};
+
+TempoEstimatorB::BpmRange selectBpmRangePreset()
+{
+    static const BpmPreset kPresets[] = {
+        {"70-180 (default)", 70.0f, 180.0f},
+        {"48-95", 48.0f, 95.0f},
+        {"58-115", 58.0f, 115.0f},
+        {"68-135", 68.0f, 135.0f},
+        {"78-155", 78.0f, 155.0f},
+        {"88-175", 88.0f, 175.0f},
+        {"98-195", 98.0f, 195.0f},
+        {"108-215", 108.0f, 215.0f},
+        {"118-235", 118.0f, 235.0f},
+        {"128-255", 128.0f, 255.0f}
+    };
+
+    std::cout << "Select BPM preset range:\n";
+    for(size_t i = 0; i < (sizeof(kPresets) / sizeof(kPresets[0])); ++i) {
+        std::cout << "  " << (i + 1) << ". " << kPresets[i].label << "\n";
+    }
+    std::cout << "Choice [1-10, Enter=1]: " << std::flush;
+
+    std::string line;
+    if(!std::getline(std::cin, line) || line.empty()) {
+        return {kPresets[0].minBpm, kPresets[0].maxBpm};
+    }
+
+    try {
+        const int choice = std::stoi(line);
+        if(choice >= 1 && choice <= 10) {
+            const BpmPreset& preset = kPresets[static_cast<size_t>(choice - 1)];
+            return {preset.minBpm, preset.maxBpm};
+        }
+    } catch(...) {
+    }
+
+    std::cout << "Invalid selection, fallback to default 70-180.\n";
+    return {kPresets[0].minBpm, kPresets[0].maxBpm};
+}
+
 bool fileExists(const std::string& path)
 {
     std::ifstream stream(path.c_str(), std::ios::binary);
@@ -118,7 +163,8 @@ int runPipeline(const std::string& inputPath)
         return EXIT_FAILURE;
     }
 
-    const std::vector<Vortex::TempoResult> rawTempos = TempoEstimatorB::estimateTempo(onsets, sampleRate);
+    const TempoEstimatorB::BpmRange bpmRange = selectBpmRangePreset();
+    const std::vector<Vortex::TempoResult> rawTempos = TempoEstimatorB::estimateTempo(onsets, sampleRate, bpmRange);
     if(rawTempos.empty()) {
         std::cerr << "Error: no tempo candidates.\n";
         return EXIT_FAILURE;

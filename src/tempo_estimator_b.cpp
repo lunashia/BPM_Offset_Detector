@@ -8,8 +8,8 @@ namespace TempoEstimatorB {
 namespace {
 
 // Stable search range assumption for production B estimator.
-static const float kMinBPM = 80.0f;
-static const float kMaxBPM = 200.0f;
+static const float kDefaultMinBPM = 70.0f;
+static const float kDefaultMaxBPM = 180.0f;
 static const float kPreferredMinBPM = 110.0f;
 static const int kTopK = 3;
 static const float kAutoCorrBinSec = 0.0005f;
@@ -35,6 +35,27 @@ struct CandidateSort {
 int roundToInt(float value)
 {
     return static_cast<int>(std::floor(value + 0.5f));
+}
+
+float clampFloat(float value, float low, float high)
+{
+    return std::max(low, std::min(value, high));
+}
+
+TempoEstimatorB::BpmRange sanitizeBpmRange(TempoEstimatorB::BpmRange bpmRange)
+{
+    if(!std::isfinite(bpmRange.minBpm)) bpmRange.minBpm = kDefaultMinBPM;
+    if(!std::isfinite(bpmRange.maxBpm)) bpmRange.maxBpm = kDefaultMaxBPM;
+
+    const float hardMin = 1.0f;
+    const float hardMax = 1000.0f;
+
+    bpmRange.minBpm = clampFloat(bpmRange.minBpm, hardMin, hardMax);
+    bpmRange.maxBpm = clampFloat(bpmRange.maxBpm, hardMin, hardMax);
+    if(bpmRange.minBpm > bpmRange.maxBpm) {
+        std::swap(bpmRange.minBpm, bpmRange.maxBpm);
+    }
+    return bpmRange;
 }
 
 // WHAT:
@@ -135,7 +156,12 @@ bool buildOnsetEnvelope(const std::vector<Vortex::Onset>& onsets, int sampleRate
  *   - Structured syncopation can produce competing harmonic peaks.
  *   - Very short signals reduce ACF reliability at target lags.
  */
-std::vector<Candidate> estimateByAutoCorrelation(const std::vector<float>& envelope, int lagMin, int lagMax)
+std::vector<Candidate> estimateByAutoCorrelation(
+    const std::vector<float>& envelope,
+    int lagMin,
+    int lagMax,
+    float minBpm,
+    float maxBpm)
 {
     std::vector<Candidate> candidates;
     if(envelope.empty() || lagMin <= 0 || lagMin > lagMax) return candidates;
@@ -171,7 +197,7 @@ std::vector<Candidate> estimateByAutoCorrelation(const std::vector<float>& envel
         if(lag * 2 <= maxLag) score += 0.50f * acf[static_cast<size_t>(lag * 2)];
 
         const float bpm = 60.0f / (static_cast<float>(lag) * kAutoCorrBinSec);
-        const float tempoPrior = std::sqrt(std::max(0.0f, bpm / kMaxBPM));
+        const float tempoPrior = std::sqrt(std::max(0.0f, bpm / maxBpm));
         enhanced[static_cast<size_t>(lag)] = score * tempoPrior;
     }
 
@@ -221,7 +247,7 @@ std::vector<Candidate> estimateByAutoCorrelation(const std::vector<float>& envel
         Candidate candidate{};
         candidate.bpm = 60.0f / (refinedLag * kAutoCorrBinSec);
         candidate.rawFitness = score;
-        if(candidate.bpm >= kMinBPM && candidate.bpm <= kMaxBPM) {
+        if(candidate.bpm >= minBpm && candidate.bpm <= maxBpm) {
             candidates.push_back(candidate);
         }
     }
@@ -236,7 +262,7 @@ std::vector<Candidate> estimateByAutoCorrelation(const std::vector<float>& envel
             Candidate candidate{};
             candidate.bpm = 60.0f / (refinedLag * kAutoCorrBinSec);
             candidate.rawFitness = enhanced[static_cast<size_t>(bestLag)];
-            if(candidate.bpm >= kMinBPM && candidate.bpm <= kMaxBPM && candidate.rawFitness > 0.0f) {
+            if(candidate.bpm >= minBpm && candidate.bpm <= maxBpm && candidate.rawFitness > 0.0f) {
                 candidates.push_back(candidate);
             }
         }
@@ -294,13 +320,13 @@ std::vector<Candidate> mergeClosePeaks(std::vector<Candidate> peaks)
 // WHY:
 //   In dance/pop contexts the perceived tempo is often the doubled interpretation
 //   when raw estimate falls far below the preferred BPM band.
-void foldTempoOctave(std::vector<Candidate>& candidates)
+void foldTempoOctave(std::vector<Candidate>& candidates, float minBpm, float maxBpm)
 {
     for(Candidate& candidate : candidates) {
-        while(candidate.bpm < kPreferredMinBPM && candidate.bpm * 2.0f <= kMaxBPM) {
+        while(candidate.bpm < kPreferredMinBPM && candidate.bpm * 2.0f <= maxBpm) {
             candidate.bpm *= 2.0f;
         }
-        while(candidate.bpm > kMaxBPM && candidate.bpm * 0.5f >= kMinBPM) {
+        while(candidate.bpm > maxBpm && candidate.bpm * 0.5f >= minBpm) {
             candidate.bpm *= 0.5f;
         }
     }
@@ -348,14 +374,19 @@ float evaluatePhaseSupportForBpm(const std::vector<Vortex::Onset>& onsets, float
  * ASSUMPTION:
  *   Search radius/step are small enough to preserve candidate identity.
  */
-void refineCandidateTempoLocalSearch(std::vector<Candidate>& candidates, const std::vector<Vortex::Onset>& onsets, int sampleRate)
+void refineCandidateTempoLocalSearch(
+    std::vector<Candidate>& candidates,
+    const std::vector<Vortex::Onset>& onsets,
+    int sampleRate,
+    float minBpm,
+    float maxBpm)
 {
     if(candidates.empty() || sampleRate <= 0) return;
 
     for(Candidate& candidate : candidates) {
         const float baseBpm = candidate.bpm;
-        const float low = std::max(kMinBPM, baseBpm - kLocalRefineRangeBPM);
-        const float high = std::min(kMaxBPM, baseBpm + kLocalRefineRangeBPM);
+        const float low = std::max(minBpm, baseBpm - kLocalRefineRangeBPM);
+        const float high = std::min(maxBpm, baseBpm + kLocalRefineRangeBPM);
 
         const float baseScore = evaluatePhaseSupportForBpm(onsets, baseBpm, sampleRate);
         float bestScore = baseScore;
@@ -401,9 +432,10 @@ void rerankWithPhaseSupport(std::vector<Candidate>& candidates, const std::vecto
 
 // WHAT:
 //   Conservative fallback when signal quality is insufficient.
-std::vector<Vortex::TempoResult> fallbackResult()
+std::vector<Vortex::TempoResult> fallbackResult(float minBpm, float maxBpm)
 {
-    return {{120.0f, 1.0f}};
+    const float bpm = 0.5f * (minBpm + maxBpm);
+    return {{bpm, 1.0f}};
 }
 
 } // namespace
@@ -422,7 +454,7 @@ std::vector<Vortex::TempoResult> fallbackResult()
  *   local BPM refinement -> phase reranking -> normalized fitness output.
  *
  * ASSUMPTIONS:
- *   - Valid BPM search interval is [80, 200].
+ *   - Valid BPM search interval is controlled by bpmRange.
  *   - kAutoCorrBinSec = 0.0005s is frozen for this stable release.
  *
  * ERROR SOURCES:
@@ -431,23 +463,35 @@ std::vector<Vortex::TempoResult> fallbackResult()
  */
 std::vector<Vortex::TempoResult> estimateTempo(const std::vector<Vortex::Onset>& onsets, int sampleRate)
 {
-    if(sampleRate <= 0 || onsets.size() < 2u) return fallbackResult();
+    return estimateTempo(onsets, sampleRate, BpmRange{});
+}
+
+std::vector<Vortex::TempoResult> estimateTempo(
+    const std::vector<Vortex::Onset>& onsets,
+    int sampleRate,
+    BpmRange bpmRange)
+{
+    const BpmRange range = sanitizeBpmRange(bpmRange);
+    const float minBpm = range.minBpm;
+    const float maxBpm = range.maxBpm;
+
+    if(sampleRate <= 0 || onsets.size() < 2u) return fallbackResult(minBpm, maxBpm);
 
     const std::vector<Vortex::Onset> sorted = sortedOnsets(onsets);
     std::vector<float> envelope;
-    if(!buildOnsetEnvelope(sorted, sampleRate, envelope)) return fallbackResult();
+    if(!buildOnsetEnvelope(sorted, sampleRate, envelope)) return fallbackResult(minBpm, maxBpm);
 
-    const int lagMin = std::max(1, roundToInt((60.0f / kMaxBPM) / kAutoCorrBinSec));
-    const int lagMax = std::max(lagMin, roundToInt((60.0f / kMinBPM) / kAutoCorrBinSec));
+    const int lagMin = std::max(1, roundToInt((60.0f / maxBpm) / kAutoCorrBinSec));
+    const int lagMax = std::max(lagMin, roundToInt((60.0f / minBpm) / kAutoCorrBinSec));
 
-    std::vector<Candidate> candidates = estimateByAutoCorrelation(envelope, lagMin, lagMax);
+    std::vector<Candidate> candidates = estimateByAutoCorrelation(envelope, lagMin, lagMax, minBpm, maxBpm);
     candidates = mergeClosePeaks(candidates);
-    foldTempoOctave(candidates);
+    foldTempoOctave(candidates, minBpm, maxBpm);
     candidates = mergeClosePeaks(candidates);
-    refineCandidateTempoLocalSearch(candidates, sorted, sampleRate);
+    refineCandidateTempoLocalSearch(candidates, sorted, sampleRate, minBpm, maxBpm);
     candidates = mergeClosePeaks(candidates);
     rerankWithPhaseSupport(candidates, sorted, sampleRate);
-    if(candidates.empty()) return fallbackResult();
+    if(candidates.empty()) return fallbackResult(minBpm, maxBpm);
 
     std::stable_sort(candidates.begin(), candidates.end(), CandidateSort());
     if(static_cast<int>(candidates.size()) > kTopK) {

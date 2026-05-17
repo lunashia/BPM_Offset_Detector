@@ -7,6 +7,11 @@
 
 namespace TempoEstimatorB {
 
+struct BpmRange {
+    float minBpm = 70.0f;
+    float maxBpm = 180.0f;
+};
+
 /*
  * WHAT:
  *   Stable production tempo estimator (frozen "B" algorithm).
@@ -23,7 +28,7 @@ namespace TempoEstimatorB {
  * ASSUMPTIONS:
  *   - onset.pos unit is sample index.
  *   - Frozen key parameter: autocorrelation envelope bin size = 0.0005s.
- *   - Expected working BPM search range is [80, 200].
+ *   - Default BPM search range is [70, 180].
  *
  * NAMING NOTE:
  *   - Public entrypoint uses lowerCamelCase (estimateTempo) for this module.
@@ -32,5 +37,10 @@ namespace TempoEstimatorB {
 std::vector<Vortex::TempoResult> estimateTempo(
     const std::vector<Vortex::Onset>& onsets,
     Vortex::SampleRateHz sampleRate);
+
+std::vector<Vortex::TempoResult> estimateTempo(
+    const std::vector<Vortex::Onset>& onsets,
+    Vortex::SampleRateHz sampleRate,
+    BpmRange bpmRange);
 
 } // namespace TempoEstimatorB
